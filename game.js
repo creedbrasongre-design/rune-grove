@@ -11,7 +11,13 @@
   const newGameBtn = document.getElementById('newGameBtn');
 
   const TILE = 32;
-  const SAVE_KEY = 'rune-grove-rpg-save-v2-art';
+  const PLAYER_SPEED = 118;
+  const SAVE_KEY = 'rune-grove-rpg-save-v3-smooth';
+  const PLAYER_DRAW_W = 58;
+  const PLAYER_DRAW_H = 58;
+  const PLAYER_DRAW_OFF_X = -12;
+  const PLAYER_DRAW_OFF_Y = -14;
+  const PLAYER_HITBOX = { x: 10, y: 22, w: 12, h: 8 };
 
   const imagePaths = {
     village: 'assets/village_scene.png',
@@ -67,23 +73,33 @@
     {
       id: 'healer', x: 6, y: 3, sprite: 'healer', name: 'Grove Healer',
       talk: () => showDialogue('Grove Healer: Rest here and I will restore your HP and energy.', [
-        { label: 'Heal for free', onClick: () => { player.hp = player.maxHp; player.energy = player.maxEnergy; log('You feel refreshed.'); closeDialogue(); updateStats(); } },
+        {
+          label: 'Heal for free', onClick: () => {
+            player.hp = player.maxHp;
+            player.energy = player.maxEnergy;
+            log('You feel refreshed.');
+            closeDialogue();
+            updateStats();
+          }
+        },
         { label: 'Bye', onClick: closeDialogue },
       ])
     },
     {
       id: 'merchant', x: 18, y: 12, sprite: 'merchant', name: 'Potion Merchant',
       talk: () => showDialogue('Potion Merchant: A potion costs 5 coins. It restores 15 HP in battle.', [
-        { label: 'Buy potion', onClick: () => {
-          if (player.coins >= 5) {
-            player.coins -= 5;
-            player.potions += 1;
-            log('Bought 1 potion.');
-          } else {
-            log('Not enough coins.');
+        {
+          label: 'Buy potion', onClick: () => {
+            if (player.coins >= 5) {
+              player.coins -= 5;
+              player.potions += 1;
+              log('Bought 1 potion.');
+            } else {
+              log('Not enough coins.');
+            }
+            updateStats();
           }
-          updateStats();
-        }},
+        },
         { label: 'Bye', onClick: closeDialogue },
       ])
     },
@@ -101,29 +117,41 @@
     { name: 'Shadow Beetle', sprite: 'shadow_beetle', hp: 26, attack: 6, xp: 12, coins: 5 },
   ];
 
-  const defaultPlayer = () => ({
-    x: 2,
-    y: 2,
-    level: 1,
-    hp: 30,
-    maxHp: 30,
-    energy: 12,
-    maxEnergy: 12,
-    xp: 0,
-    xpToNext: 20,
-    coins: 0,
-    potions: 2,
-    facing: 'down',
-    wins: 0,
-  });
+  function defaultPlayer() {
+    return {
+      x: 2 * TILE,
+      y: 2 * TILE,
+      level: 1,
+      hp: 30,
+      maxHp: 30,
+      energy: 12,
+      maxEnergy: 12,
+      xp: 0,
+      xpToNext: 20,
+      coins: 0,
+      potions: 2,
+      facing: 'down',
+      wins: 0,
+      animFrame: 0,
+      animClock: 0,
+      encounterDistance: 0,
+    };
+  }
 
   let player = defaultPlayer();
   let gameMode = 'world';
   let battle = null;
   const keys = new Set();
-  let moveCooldown = 0;
-  let walkFrame = 0;
   let loaded = false;
+  let lastTime = 0;
+
+  const portalTile = (() => {
+    for (let y = 0; y < map.length; y++) {
+      const x = map[y].indexOf('p');
+      if (x !== -1) return { x, y };
+    }
+    return { x: 23, y: 1 };
+  })();
 
   function log(message) {
     const p = document.createElement('p');
@@ -144,14 +172,69 @@
     `;
   }
 
-  function getTile(x, y) {
-    if (y < 0 || y >= map.length || x < 0 || x >= map[0].length) return 't';
-    return map[y][x];
+  function getTile(tx, ty) {
+    if (ty < 0 || ty >= map.length || tx < 0 || tx >= map[0].length) return 't';
+    return map[ty][tx];
   }
 
-  function isWalkable(x, y) {
-    const npcHere = npcs.some(npc => npc.x === x && npc.y === y);
-    return tileInfo[getTile(x, y)].walkable && !npcHere;
+  function playerFootCenter(px = player.x, py = player.y) {
+    return {
+      x: px + PLAYER_HITBOX.x + PLAYER_HITBOX.w / 2,
+      y: py + PLAYER_HITBOX.y + PLAYER_HITBOX.h / 2,
+    };
+  }
+
+  function tileAtPixel(px, py) {
+    return getTile(Math.floor(px / TILE), Math.floor(py / TILE));
+  }
+
+  function playerTileUnderfoot(px = player.x, py = player.y) {
+    const foot = playerFootCenter(px, py);
+    return tileAtPixel(foot.x, foot.y);
+  }
+
+  function rectsIntersect(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function playerRect(px = player.x, py = player.y) {
+    return {
+      x: px + PLAYER_HITBOX.x,
+      y: py + PLAYER_HITBOX.y,
+      w: PLAYER_HITBOX.w,
+      h: PLAYER_HITBOX.h,
+    };
+  }
+
+  function npcRect(npc) {
+    return {
+      x: npc.x * TILE + 8,
+      y: npc.y * TILE + 18,
+      w: 16,
+      h: 10,
+    };
+  }
+
+  function isAreaWalkable(nextX, nextY) {
+    const rect = playerRect(nextX, nextY);
+    const samplePoints = [
+      [rect.x, rect.y],
+      [rect.x + rect.w, rect.y],
+      [rect.x, rect.y + rect.h],
+      [rect.x + rect.w, rect.y + rect.h],
+      [rect.x + rect.w / 2, rect.y + rect.h / 2],
+    ];
+
+    for (const [sx, sy] of samplePoints) {
+      const tile = tileAtPixel(sx, sy);
+      if (!tileInfo[tile].walkable) return false;
+    }
+
+    for (const npc of npcs) {
+      if (rectsIntersect(rect, npcRect(npc))) return false;
+    }
+
+    return true;
   }
 
   function drawRoundedRect(x, y, w, h, r) {
@@ -197,39 +280,19 @@
       ctx.fillStyle = '#7bb169';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
-    ctx.fillStyle = 'rgba(15, 27, 15, .18)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // soft encounter zone hints
-    for (let y = 0; y < map.length; y++) {
-      for (let x = 0; x < map[y].length; x++) {
-        const tile = map[y][x];
-        const px = x * TILE;
-        const py = y * TILE;
-        if (tile === 'g') {
-          ctx.fillStyle = 'rgba(96, 168, 89, .18)';
-          ctx.fillRect(px + 5, py + 5, TILE - 10, TILE - 10);
-        }
-        if (tile === 'w') {
-          ctx.fillStyle = 'rgba(60, 140, 214, .22)';
-          ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
-        }
-      }
-    }
   }
 
   function drawPortal() {
-    const tileX = 23, tileY = 1;
-    const px = tileX * TILE;
-    const py = tileY * TILE;
-    const pulse = 0.62 + Math.sin(Date.now() / 180) * 0.2;
+    const px = portalTile.x * TILE;
+    const py = portalTile.y * TILE;
+    const pulse = 0.55 + Math.sin(Date.now() / 180) * 0.2;
     ctx.save();
-    ctx.fillStyle = `rgba(127, 233, 255, ${pulse})`;
+    ctx.fillStyle = `rgba(163, 234, 255, ${pulse})`;
     ctx.beginPath();
-    ctx.ellipse(px + 16, py + 16, 15, 22, 0, 0, Math.PI * 2);
+    ctx.ellipse(px + 16, py + 15, 13, 18, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#d8fbff';
     ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(228, 252, 255, .9)';
     ctx.stroke();
     ctx.restore();
   }
@@ -247,18 +310,15 @@
 
   function currentPlayerImage() {
     const dir = player.facing === 'up' ? 'up' : player.facing === 'left' ? 'left' : player.facing === 'right' ? 'right' : 'down';
-    const frame = walkFrame % 4;
-    return images[`player_${dir}_${frame}`] || images[`player_${dir}_0`];
+    return images[`player_${dir}_${player.animFrame}`] || images[`player_${dir}_0`];
   }
 
   function drawPlayer() {
-    const px = player.x * TILE;
-    const py = player.y * TILE;
     ctx.fillStyle = 'rgba(0,0,0,.28)';
     ctx.beginPath();
-    ctx.ellipse(px + 16, py + 28, 12, 5, 0, 0, Math.PI * 2);
+    ctx.ellipse(player.x + 16, player.y + 28, 12, 5, 0, 0, Math.PI * 2);
     ctx.fill();
-    drawImageFit(currentPlayerImage(), px - 12, py - 14, 58, 58);
+    drawImageFit(currentPlayerImage(), player.x + PLAYER_DRAW_OFF_X, player.y + PLAYER_DRAW_OFF_Y, PLAYER_DRAW_W, PLAYER_DRAW_H);
   }
 
   function drawWorld() {
@@ -267,9 +327,8 @@
     npcs.forEach(drawNpc);
     drawPlayer();
 
-    // top instruction ribbon
     ctx.fillStyle = 'rgba(28, 20, 10, .72)';
-    drawRoundedRect(10, 10, 470, 42, 12);
+    drawRoundedRect(10, 10, 500, 42, 12);
     ctx.fillStyle = '#fff8e5';
     ctx.font = '16px Georgia';
     ctx.textAlign = 'left';
@@ -373,7 +432,7 @@
       { label: `Potion (${player.potions})`, onClick: usePotion, disabled: player.potions <= 0 || player.hp >= player.maxHp },
       { label: 'Defend', onClick: defend },
       { label: 'Run', onClick: tryRun },
-    ]);
+    ], 'battle');
   }
 
   function playerAttack(type) {
@@ -435,8 +494,10 @@
     if (player.hp <= 0) {
       player.hp = Math.ceil(player.maxHp * 0.6);
       player.energy = Math.ceil(player.maxEnergy * 0.6);
-      player.x = 2;
-      player.y = 2;
+      player.x = 2 * TILE;
+      player.y = 2 * TILE;
+      player.animFrame = 0;
+      player.animClock = 0;
       battle = null;
       log('You fainted and woke up near the path.');
       closeDialogue();
@@ -459,7 +520,7 @@
     updateStats();
     showDialogue('Battle won! You can keep exploring.', [
       { label: 'Continue', onClick: () => { closeDialogue(); gameMode = 'world'; } },
-    ]);
+    ], 'dialogue');
   }
 
   function checkLevelUp() {
@@ -479,7 +540,8 @@
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
-  function showDialogue(text, choices) {
+  function showDialogue(text, choices, mode = 'dialogue') {
+    if (mode !== 'battle' && gameMode !== 'win') gameMode = 'dialogue';
     dialogueEl.classList.remove('hidden');
     dialogueTextEl.textContent = text;
     choicesEl.innerHTML = '';
@@ -495,28 +557,28 @@
   function closeDialogue() {
     dialogueEl.classList.add('hidden');
     choicesEl.innerHTML = '';
-    if (gameMode !== 'battle' && gameMode !== 'win') gameMode = 'world';
+    if (gameMode === 'dialogue') gameMode = 'world';
   }
 
-  function adjacentNpc() {
-    const offsets = [
-      { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 0 }
-    ];
-    for (const o of offsets) {
-      const found = npcs.find(npc => npc.x === player.x + o.x && npc.y === player.y + o.y);
-      if (found) return found;
+  function nearestNpc(maxDistance = 44) {
+    const foot = playerFootCenter();
+    let best = null;
+    for (const npc of npcs) {
+      const npcCenter = { x: npc.x * TILE + 16, y: npc.y * TILE + 24 };
+      const dist = Math.hypot(foot.x - npcCenter.x, foot.y - npcCenter.y);
+      if (dist <= maxDistance && (!best || dist < best.dist)) best = { npc, dist };
     }
-    return null;
+    return best?.npc || null;
   }
 
   function interact() {
     if (gameMode !== 'world') return;
-    const npc = adjacentNpc();
+    const npc = nearestNpc();
     if (npc) {
       npc.talk();
       return;
     }
-    const tile = getTile(player.x, player.y);
+    const tile = playerTileUnderfoot();
     if (tile === 'p') {
       if (player.level >= 3) {
         gameMode = 'win';
@@ -532,22 +594,60 @@
     log('Nothing to interact with here.');
   }
 
-  function move(dx, dy, facing) {
-    if (gameMode !== 'world') return;
-    player.facing = facing;
-    const nx = player.x + dx;
-    const ny = player.y + dy;
-    if (!isWalkable(nx, ny)) {
-      log('Blocked. Try another path.');
+  function updateMovement(dt) {
+    if (gameMode !== 'world') {
+      player.animFrame = 0;
+      player.animClock = 0;
       return;
     }
-    player.x = nx;
-    player.y = ny;
-    walkFrame = (walkFrame + 1) % 4;
-    const tile = getTile(player.x, player.y);
-    if (tileInfo[tile].encounter && Math.random() < 0.18) {
-      startBattle('The tall grass rustles!');
+
+    let dx = 0;
+    let dy = 0;
+    if (keys.has('arrowup') || keys.has('w')) dy -= 1;
+    if (keys.has('arrowdown') || keys.has('s')) dy += 1;
+    if (keys.has('arrowleft') || keys.has('a')) dx -= 1;
+    if (keys.has('arrowright') || keys.has('d')) dx += 1;
+
+    const moving = dx !== 0 || dy !== 0;
+    if (!moving) {
+      player.animFrame = 0;
+      player.animClock = 0;
+      return;
     }
+
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len;
+    dy /= len;
+
+    if (Math.abs(dx) > Math.abs(dy)) player.facing = dx < 0 ? 'left' : 'right';
+    else player.facing = dy < 0 ? 'up' : 'down';
+
+    const step = PLAYER_SPEED * dt;
+    const nextX = player.x + dx * step;
+    const nextY = player.y + dy * step;
+
+    if (isAreaWalkable(nextX, player.y)) player.x = nextX;
+    if (isAreaWalkable(player.x, nextY)) player.y = nextY;
+
+    player.animClock += dt;
+    if (player.animClock >= 0.14) {
+      player.animClock = 0;
+      player.animFrame = (player.animFrame + 1) % 4;
+    }
+
+    const tile = playerTileUnderfoot();
+    if (tileInfo[tile].encounter) {
+      player.encounterDistance += step;
+      if (player.encounterDistance >= 28) {
+        player.encounterDistance = 0;
+        if (Math.random() < 0.18) {
+          startBattle('The tall grass rustles!');
+        }
+      }
+    } else {
+      player.encounterDistance = 0;
+    }
+
     if (tile === 'p') interact();
   }
 
@@ -563,7 +663,12 @@
       return;
     }
     try {
-      player = { ...defaultPlayer(), ...JSON.parse(raw) };
+      const loadedPlayer = JSON.parse(raw);
+      player = { ...defaultPlayer(), ...loadedPlayer };
+      if (typeof player.x !== 'number' || typeof player.y !== 'number') {
+        player.x = 2 * TILE;
+        player.y = 2 * TILE;
+      }
       gameMode = 'world';
       battle = null;
       closeDialogue();
@@ -590,7 +695,7 @@
     if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' ', 'w', 'a', 's', 'd', 'e'].includes(key)) {
       e.preventDefault();
     }
-    if (key === 'e' || key === ' ') interact();
+    if ((key === 'e' || key === ' ') && gameMode === 'world') interact();
     keys.add(key);
   });
 
@@ -600,18 +705,19 @@
   loadBtn.addEventListener('click', loadGame);
   newGameBtn.addEventListener('click', newGame);
 
-  function gameLoop() {
-    if (moveCooldown > 0) moveCooldown -= 1;
-    if (gameMode === 'world' && moveCooldown <= 0) {
-      if (keys.has('arrowup') || keys.has('w')) { move(0, -1, 'up'); moveCooldown = 9; }
-      else if (keys.has('arrowdown') || keys.has('s')) { move(0, 1, 'down'); moveCooldown = 9; }
-      else if (keys.has('arrowleft') || keys.has('a')) { move(-1, 0, 'left'); moveCooldown = 9; }
-      else if (keys.has('arrowright') || keys.has('d')) { move(1, 0, 'right'); moveCooldown = 9; }
-    }
+  function render() {
+    if (gameMode === 'battle' && battle) drawBattleScene();
+    else drawWorld();
+  }
+
+  function gameLoop(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const dt = Math.min((timestamp - lastTime) / 1000, 0.033);
+    lastTime = timestamp;
 
     if (loaded) {
-      if (gameMode === 'battle') drawBattleScene();
-      else drawWorld();
+      updateMovement(dt);
+      render();
     } else {
       ctx.fillStyle = '#173524';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
