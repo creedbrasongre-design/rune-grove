@@ -11,10 +11,30 @@
   const newGameBtn = document.getElementById('newGameBtn');
 
   const TILE = 32;
-  const SAVE_KEY = 'rune-grove-rpg-save-v1';
+  const SAVE_KEY = 'rune-grove-rpg-save-v2-art';
 
-  // Tile key:
-  // . = path, g = tall grass, t = tree, w = water, s = stone, h = house, p = portal
+  const imagePaths = {
+    village: 'assets/village_scene.png',
+    player: {
+      up: ['assets/player_back_0.png', 'assets/player_back_1.png', 'assets/player_back_2.png', 'assets/player_back_3.png'],
+      down: ['assets/player_front_0.png', 'assets/player_front_1.png', 'assets/player_front_2.png', 'assets/player_front_3.png'],
+      left: ['assets/player_left_0.png', 'assets/player_left_1.png', 'assets/player_left_2.png', 'assets/player_left_3.png'],
+      right: ['assets/player_right_0.png', 'assets/player_right_1.png', 'assets/player_right_2.png', 'assets/player_right_3.png'],
+    },
+    npc: {
+      healer: 'assets/npc_healer.png',
+      merchant: 'assets/npc_merchant.png',
+      guardian: 'assets/npc_guardian.png',
+    },
+    enemy: {
+      mossling: 'assets/enemy_mossling.png',
+      pebble_pup: 'assets/enemy_pebble_pup.png',
+      shadow_beetle: 'assets/enemy_shadow_beetle.png',
+    },
+  };
+
+  const images = {};
+
   const map = [
     'ttttttttttttttttttttttttt',
     't.......gggg......s....pt',
@@ -45,14 +65,14 @@
 
   const npcs = [
     {
-      id: 'healer', x: 6, y: 3, emoji: '🧙', name: 'Grove Healer',
+      id: 'healer', x: 6, y: 3, sprite: 'healer', name: 'Grove Healer',
       talk: () => showDialogue('Grove Healer: Rest here and I will restore your HP and energy.', [
         { label: 'Heal for free', onClick: () => { player.hp = player.maxHp; player.energy = player.maxEnergy; log('You feel refreshed.'); closeDialogue(); updateStats(); } },
         { label: 'Bye', onClick: closeDialogue },
       ])
     },
     {
-      id: 'merchant', x: 18, y: 12, emoji: '🧺', name: 'Potion Merchant',
+      id: 'merchant', x: 18, y: 12, sprite: 'merchant', name: 'Potion Merchant',
       talk: () => showDialogue('Potion Merchant: A potion costs 5 coins. It restores 15 HP in battle.', [
         { label: 'Buy potion', onClick: () => {
           if (player.coins >= 5) {
@@ -68,7 +88,7 @@
       ])
     },
     {
-      id: 'guardian', x: 20, y: 2, emoji: '🛡️', name: 'Portal Guardian',
+      id: 'guardian', x: 20, y: 2, sprite: 'guardian', name: 'Portal Guardian',
       talk: () => showDialogue('Portal Guardian: The portal opens for brave heroes. Reach Level 3, then step into the glow.', [
         { label: 'Got it', onClick: closeDialogue },
       ])
@@ -76,9 +96,9 @@
   ];
 
   const enemyTypes = [
-    { name: 'Mossling', emoji: '🌿', hp: 18, attack: 4, xp: 8, coins: 3 },
-    { name: 'Pebble Pup', emoji: '🐾', hp: 22, attack: 5, xp: 10, coins: 4 },
-    { name: 'Shadow Beetle', emoji: '🪲', hp: 26, attack: 6, xp: 12, coins: 5 },
+    { name: 'Mossling', sprite: 'mossling', hp: 18, attack: 4, xp: 8, coins: 3 },
+    { name: 'Pebble Pup', sprite: 'pebble_pup', hp: 22, attack: 5, xp: 10, coins: 4 },
+    { name: 'Shadow Beetle', sprite: 'shadow_beetle', hp: 26, attack: 6, xp: 12, coins: 5 },
   ];
 
   const defaultPlayer = () => ({
@@ -98,18 +118,18 @@
   });
 
   let player = defaultPlayer();
-  let gameMode = 'world'; // world, dialogue, battle, win
+  let gameMode = 'world';
   let battle = null;
-  let messageTimer = 0;
-
   const keys = new Set();
   let moveCooldown = 0;
+  let walkFrame = 0;
+  let loaded = false;
 
   function log(message) {
     const p = document.createElement('p');
     p.textContent = message;
     logEl.prepend(p);
-    while (logEl.children.length > 12) logEl.removeChild(logEl.lastChild);
+    while (logEl.children.length > 14) logEl.removeChild(logEl.lastChild);
   }
 
   function updateStats() {
@@ -145,133 +165,181 @@
     ctx.fill();
   }
 
-  function drawTile(tile, x, y) {
-    const px = x * TILE;
-    const py = y * TILE;
-    if (tile === '.') {
-      ctx.fillStyle = '#b89968';
-      ctx.fillRect(px, py, TILE, TILE);
-      ctx.fillStyle = 'rgba(255,255,255,.08)';
-      ctx.fillRect(px + 3, py + 7, 4, 4);
-      ctx.fillRect(px + 20, py + 21, 5, 3);
+  function loadAllImages() {
+    const jobs = [];
+    const store = (key, path) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => { images[key] = img; resolve(); };
+      img.onerror = () => { console.warn('Failed to load', path); resolve(); };
+      img.src = path;
+    });
+
+    jobs.push(store('village', imagePaths.village));
+    Object.entries(imagePaths.player).forEach(([dir, arr]) => arr.forEach((path, i) => jobs.push(store(`player_${dir}_${i}`, path))));
+    Object.entries(imagePaths.npc).forEach(([key, path]) => jobs.push(store(`npc_${key}`, path)));
+    Object.entries(imagePaths.enemy).forEach(([key, path]) => jobs.push(store(`enemy_${key}`, path)));
+    return Promise.all(jobs).then(() => { loaded = true; });
+  }
+
+  function drawImageFit(img, x, y, w, h) {
+    if (!img) return;
+    const scale = Math.min(w / img.width, h / img.height);
+    const nw = img.width * scale;
+    const nh = img.height * scale;
+    ctx.drawImage(img, x + (w - nw) / 2, y + (h - nh) / 2, nw, nh);
+  }
+
+  function drawWorldBackground() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (images.village) {
+      ctx.drawImage(images.village, 0, 0, canvas.width, canvas.height);
+    } else {
+      ctx.fillStyle = '#7bb169';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
-    if (tile === 'g') {
-      ctx.fillStyle = '#4c9f62';
-      ctx.fillRect(px, py, TILE, TILE);
-      ctx.fillStyle = '#3b7e4f';
-      for (let i = 0; i < 5; i++) {
-        const gx = px + 4 + i * 6;
-        ctx.fillRect(gx, py + 15 - (i % 2) * 4, 3, 12);
+    ctx.fillStyle = 'rgba(15, 27, 15, .18)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // soft encounter zone hints
+    for (let y = 0; y < map.length; y++) {
+      for (let x = 0; x < map[y].length; x++) {
+        const tile = map[y][x];
+        const px = x * TILE;
+        const py = y * TILE;
+        if (tile === 'g') {
+          ctx.fillStyle = 'rgba(96, 168, 89, .18)';
+          ctx.fillRect(px + 5, py + 5, TILE - 10, TILE - 10);
+        }
+        if (tile === 'w') {
+          ctx.fillStyle = 'rgba(60, 140, 214, .22)';
+          ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
+        }
       }
-    }
-    if (tile === 't') {
-      ctx.fillStyle = '#2f7d46';
-      ctx.fillRect(px, py, TILE, TILE);
-      ctx.fillStyle = '#206139';
-      ctx.beginPath();
-      ctx.arc(px + 16, py + 15, 13, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#6f4b2d';
-      ctx.fillRect(px + 13, py + 18, 6, 12);
-    }
-    if (tile === 'w') {
-      ctx.fillStyle = '#2d7dbd';
-      ctx.fillRect(px, py, TILE, TILE);
-      ctx.fillStyle = 'rgba(255,255,255,.25)';
-      ctx.fillRect(px + 4, py + 10, 18, 3);
-      ctx.fillRect(px + 12, py + 22, 14, 3);
-    }
-    if (tile === 's') {
-      ctx.fillStyle = '#8c929c';
-      ctx.fillRect(px, py, TILE, TILE);
-      ctx.strokeStyle = 'rgba(0,0,0,.18)';
-      ctx.strokeRect(px + 3, py + 5, 26, 20);
-    }
-    if (tile === 'h') {
-      ctx.fillStyle = '#a56a43';
-      ctx.fillRect(px, py, TILE, TILE);
-      ctx.fillStyle = '#7f3434';
-      ctx.beginPath();
-      ctx.moveTo(px + 2, py + 14);
-      ctx.lineTo(px + 16, py + 3);
-      ctx.lineTo(px + 30, py + 14);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = '#442b1f';
-      ctx.fillRect(px + 13, py + 18, 7, 12);
-    }
-    if (tile === 'p') {
-      ctx.fillStyle = '#314468';
-      ctx.fillRect(px, py, TILE, TILE);
-      const pulse = 0.5 + Math.sin(Date.now() / 180) * 0.2;
-      ctx.fillStyle = `rgba(160, 230, 255, ${pulse})`;
-      ctx.beginPath();
-      ctx.ellipse(px + 16, py + 16, 9, 14, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#d2f7ff';
-      ctx.stroke();
     }
   }
 
-  function drawWorld() {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    for (let y = 0; y < map.length; y++) {
-      for (let x = 0; x < map[y].length; x++) {
-        drawTile(map[y][x], x, y);
-      }
-    }
+  function drawPortal() {
+    const tileX = 23, tileY = 1;
+    const px = tileX * TILE;
+    const py = tileY * TILE;
+    const pulse = 0.62 + Math.sin(Date.now() / 180) * 0.2;
+    ctx.save();
+    ctx.fillStyle = `rgba(127, 233, 255, ${pulse})`;
+    ctx.beginPath();
+    ctx.ellipse(px + 16, py + 16, 15, 22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#d8fbff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
 
-    // NPCs
-    ctx.font = '24px serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    npcs.forEach(npc => {
-      ctx.fillStyle = 'rgba(0,0,0,.22)';
-      ctx.beginPath();
-      ctx.ellipse(npc.x * TILE + 16, npc.y * TILE + 26, 10, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillText(npc.emoji, npc.x * TILE + 16, npc.y * TILE + 15);
-    });
+  function drawNpc(npc) {
+    const img = images[`npc_${npc.sprite}`];
+    const px = npc.x * TILE;
+    const py = npc.y * TILE;
+    ctx.fillStyle = 'rgba(0,0,0,.22)';
+    ctx.beginPath();
+    ctx.ellipse(px + 16, py + 28, 12, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    drawImageFit(img, px - 12, py - 12, 56, 56);
+  }
 
-    // Player
+  function currentPlayerImage() {
+    const dir = player.facing === 'up' ? 'up' : player.facing === 'left' ? 'left' : player.facing === 'right' ? 'right' : 'down';
+    const frame = walkFrame % 4;
+    return images[`player_${dir}_${frame}`] || images[`player_${dir}_0`];
+  }
+
+  function drawPlayer() {
     const px = player.x * TILE;
     const py = player.y * TILE;
     ctx.fillStyle = 'rgba(0,0,0,.28)';
     ctx.beginPath();
-    ctx.ellipse(px + 16, py + 27, 10, 4, 0, 0, Math.PI * 2);
+    ctx.ellipse(px + 16, py + 28, 12, 5, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#5bbcff';
-    ctx.beginPath();
-    ctx.arc(px + 16, py + 12, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#3455d1';
-    ctx.fillRect(px + 8, py + 19, 16, 9);
-    ctx.fillStyle = '#f5f7fb';
-    if (player.facing === 'left') ctx.fillRect(px + 10, py + 10, 3, 3);
-    else if (player.facing === 'right') ctx.fillRect(px + 19, py + 10, 3, 3);
-    else {
-      ctx.fillRect(px + 12, py + 10, 3, 3);
-      ctx.fillRect(px + 18, py + 10, 3, 3);
-    }
+    drawImageFit(currentPlayerImage(), px - 12, py - 14, 58, 58);
+  }
 
-    // Top message
-    ctx.fillStyle = 'rgba(10,14,22,.7)';
-    drawRoundedRect(10, 10, 430, 38, 10);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '16px system-ui';
+  function drawWorld() {
+    drawWorldBackground();
+    drawPortal();
+    npcs.forEach(drawNpc);
+    drawPlayer();
+
+    // top instruction ribbon
+    ctx.fillStyle = 'rgba(28, 20, 10, .72)';
+    drawRoundedRect(10, 10, 470, 42, 12);
+    ctx.fillStyle = '#fff8e5';
+    ctx.font = '16px Georgia';
     ctx.textAlign = 'left';
-    ctx.fillText('Explore the Grove. Press E near characters. Grass can start battles.', 24, 34);
+    ctx.fillText('Explore the Grove. Press E near characters. Tall grass can start battles.', 22, 36);
 
     if (gameMode === 'win') {
-      ctx.fillStyle = 'rgba(0,0,0,.68)';
+      ctx.fillStyle = 'rgba(0,0,0,.62)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#f5f7fb';
+      ctx.fillStyle = '#fff6dd';
       ctx.textAlign = 'center';
-      ctx.font = '44px system-ui';
+      ctx.font = '44px Georgia';
       ctx.fillText('You opened the Rune Portal!', canvas.width / 2, 205);
-      ctx.font = '20px system-ui';
-      ctx.fillText('You can keep expanding this into a full RPG world.', canvas.width / 2, 245);
+      ctx.font = '20px Georgia';
+      ctx.fillText('You can keep expanding this into a bigger adventure.', canvas.width / 2, 245);
     }
+  }
+
+  function drawBattleBar(x, y, w, h, pct, color, label) {
+    ctx.fillStyle = 'rgba(34, 25, 17, .82)';
+    drawRoundedRect(x, y, w, h, 10);
+    ctx.fillStyle = 'rgba(255,255,255,.12)';
+    drawRoundedRect(x + 3, y + 3, w - 6, h - 6, 8);
+    ctx.fillStyle = color;
+    drawRoundedRect(x + 3, y + 3, Math.max(12, (w - 6) * Math.max(0, pct)), h - 6, 8);
+    ctx.fillStyle = '#fff4da';
+    ctx.font = '14px Georgia';
+    ctx.textAlign = 'left';
+    ctx.fillText(label, x + 10, y + 18);
+  }
+
+  function drawBattleScene() {
+    drawWorldBackground();
+    ctx.fillStyle = 'rgba(17, 26, 14, .44)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(255, 246, 225, .93)';
+    drawRoundedRect(18, 20, 764, 440, 20);
+    ctx.fillStyle = 'rgba(69, 51, 28, .22)';
+    drawRoundedRect(30, 32, 740, 416, 16);
+
+    const enemy = battle.enemy;
+    const enemyImg = images[`enemy_${enemy.sprite}`];
+    const playerImg = images['player_right_1'] || currentPlayerImage();
+
+    ctx.fillStyle = '#4a321b';
+    ctx.font = '24px Georgia';
+    ctx.textAlign = 'center';
+    ctx.fillText(`Battle: ${enemy.name}`, canvas.width / 2, 62);
+
+    drawBattleBar(70, 88, 250, 24, enemy.hp / enemy.maxHp, '#d26b60', `${enemy.name} HP ${enemy.hp}/${enemy.maxHp}`);
+    drawBattleBar(480, 320, 250, 24, player.hp / player.maxHp, '#d26b60', `Hero HP ${player.hp}/${player.maxHp}`);
+    drawBattleBar(480, 352, 250, 24, player.energy / player.maxEnergy, '#5a91d8', `Energy ${player.energy}/${player.maxEnergy}`);
+
+    drawImageFit(enemyImg, 74, 130, 240, 180);
+    drawImageFit(playerImg, 480, 165, 180, 180);
+
+    ctx.fillStyle = 'rgba(38, 27, 15, .14)';
+    ctx.beginPath();
+    ctx.ellipse(200, 300, 85, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(575, 352, 75, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#5a3a1f';
+    ctx.font = '18px Georgia';
+    ctx.textAlign = 'left';
+    ctx.fillText('Choose your action in the panel below.', 70, 400);
+    ctx.font = '16px Georgia';
+    ctx.fillStyle = '#725536';
+    ctx.fillText('Strike • Spark • Potion • Defend • Run', 70, 427);
   }
 
   function makeEnemy() {
@@ -294,7 +362,7 @@
       defending: false,
       turn: 'player',
     };
-    showBattle(`${reason} ${battle.enemy.emoji} ${battle.enemy.name} wants to battle!`);
+    showBattle(`${reason} ${battle.enemy.name} wants to battle!`);
   }
 
   function showBattle(text) {
@@ -412,7 +480,6 @@
   }
 
   function showDialogue(text, choices) {
-    gameMode = gameMode === 'battle' ? 'battle' : 'dialogue';
     dialogueEl.classList.remove('hidden');
     dialogueTextEl.textContent = text;
     choicesEl.innerHTML = '';
@@ -476,6 +543,7 @@
     }
     player.x = nx;
     player.y = ny;
+    walkFrame = (walkFrame + 1) % 4;
     const tile = getTile(player.x, player.y);
     if (tileInfo[tile].encounter && Math.random() < 0.18) {
       startBattle('The tall grass rustles!');
@@ -532,7 +600,7 @@
   loadBtn.addEventListener('click', loadGame);
   newGameBtn.addEventListener('click', newGame);
 
-  function gameLoop(timestamp) {
+  function gameLoop() {
     if (moveCooldown > 0) moveCooldown -= 1;
     if (gameMode === 'world' && moveCooldown <= 0) {
       if (keys.has('arrowup') || keys.has('w')) { move(0, -1, 'up'); moveCooldown = 9; }
@@ -540,11 +608,23 @@
       else if (keys.has('arrowleft') || keys.has('a')) { move(-1, 0, 'left'); moveCooldown = 9; }
       else if (keys.has('arrowright') || keys.has('d')) { move(1, 0, 'right'); moveCooldown = 9; }
     }
-    drawWorld();
+
+    if (loaded) {
+      if (gameMode === 'battle') drawBattleScene();
+      else drawWorld();
+    } else {
+      ctx.fillStyle = '#173524';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#fff5dd';
+      ctx.font = '28px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText('Loading Rune Grove art...', canvas.width / 2, canvas.height / 2);
+    }
+
     requestAnimationFrame(gameLoop);
   }
 
   updateStats();
   log('Welcome! Walk through grass to find battles. Talk to the healer or merchant.');
-  requestAnimationFrame(gameLoop);
+  loadAllImages().finally(() => requestAnimationFrame(gameLoop));
 })();

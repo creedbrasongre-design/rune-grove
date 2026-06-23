@@ -10,8 +10,9 @@
   <main class="app">
     <header class="topbar">
       <div>
+        <p class="eyebrow">Original browser RPG starter</p>
         <h1>Rune Grove Quest</h1>
-        <p>An original 2D browser RPG starter: explore, battle, level up — no questions.</p>
+        <p>Now reskinned with fantasy character art, creature art, and a storybook-style village look.</p>
       </div>
       <div class="top-buttons">
         <button id="newGameBtn" type="button">New Game</button>
@@ -20,15 +21,28 @@
       </div>
     </header>
 
+    <section class="hero-card">
+      <img src="assets/village_scene.png" alt="Rune Grove scene art" />
+      <div class="hero-copy">
+        <h2>Your art is now inside the game</h2>
+        <p>The demo uses the generated village scene, a custom player sprite set, NPC sprites, creature art, and a fantasy UI style.</p>
+      </div>
+    </section>
+
     <section class="game-wrap">
-      <canvas id="game" width="800" height="480" aria-label="2D RPG game canvas"></canvas>
+      <div class="canvas-shell">
+        <canvas id="game" width="800" height="480" aria-label="2D RPG game canvas"></canvas>
+      </div>
+
       <aside class="panel">
         <h2>Status</h2>
         <div id="stats"></div>
+
         <h2>Controls</h2>
         <p><strong>Move:</strong> Arrow keys or WASD</p>
         <p><strong>Interact:</strong> E or Space</p>
-        <p><strong>Goal:</strong> Find the glowing portal after leveling up.</p>
+        <p><strong>Goal:</strong> Reach Level 3, then step into the glowing portal.</p>
+
         <h2>Log</h2>
         <div id="log" class="log"></div>
       </aside>
