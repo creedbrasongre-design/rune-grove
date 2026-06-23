@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Rune Grove Quest</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <h1>Rune Grove Quest</h1>
+        <p>An original 2D browser RPG starter: explore, battle, level up — no questions.</p>
+      </div>
+      <div class="top-buttons">
+        <button id="newGameBtn" type="button">New Game</button>
+        <button id="saveBtn" type="button">Save</button>
+        <button id="loadBtn" type="button">Load</button>
+      </div>
+    </header>
+
+    <section class="game-wrap">
+      <canvas id="game" width="800" height="480" aria-label="2D RPG game canvas"></canvas>
+      <aside class="panel">
+        <h2>Status</h2>
+        <div id="stats"></div>
+        <h2>Controls</h2>
+        <p><strong>Move:</strong> Arrow keys or WASD</p>
+        <p><strong>Interact:</strong> E or Space</p>
+        <p><strong>Goal:</strong> Find the glowing portal after leveling up.</p>
+        <h2>Log</h2>
+        <div id="log" class="log"></div>
+      </aside>
+    </section>
+
+    <section id="dialogue" class="dialogue hidden" aria-live="polite">
+      <p id="dialogueText"></p>
+      <div id="choices" class="choices"></div>
+    </section>
+  </main>
+
+  <script src="game.js"></script>
+</body>
+</html>
